@@ -1,5 +1,16 @@
 services:
+  reverse-proxy:
+    image: traefik:v3.1
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker"
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
   app:
+    image: ghcr.io/web3-research-kenya/ussd_eth_v2:prod
     build:
       context: .
       dockerfile: Dockerfile
@@ -7,6 +18,8 @@ services:
     restart: unless-stopped
     ports:
       - ${PORT}:${PORT}
+    labels:
+      - "traefik.enable=true"
     environment:
       APP_ENV: ${APP_ENV}
       PORT: ${PORT}
