@@ -18,8 +18,11 @@ import (
 )
 
 func (s *FiberServer) RegisterFiberRoutes() {
+	h := handlers.NewHandler(s.db)
+
 	s.App.Get("/", s.HelloWorldHandler)
-	s.App.Post("/callback", handlers.CallbackHandler)
+	s.App.Post("/callback", h.CallbackHandler)
+	s.App.Post("/events", h.EventsHandler)
 
 	s.App.Get("/health", s.healthHandler)
 

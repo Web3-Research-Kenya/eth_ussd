@@ -2,13 +2,13 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"os"
 	"strconv"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	_ "github.com/joho/godotenv/autoload"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -19,13 +19,24 @@ type Service interface {
 	// The keys and values in the map are service-specific.
 	Health() map[string]string
 
+	// Create database tables
+	CreateTable()
+
+	// Insert Record
+	InsertWallet(phoneNumber, pin, publicKey, keystorePath string) error
+
+	// Select Wallet by phone number
+	SelectWalletByPhone(phoneNumber string) (*WalletRecord, error)
+
+	// Update keystore path
+	UpdateKeystorePathByID(path string, id uint64)
 	// Close terminates the database connection.
 	// It returns an error if the connection cannot be closed.
 	Close() error
 }
 
 type service struct {
-	db *sql.DB
+	db *sqlx.DB
 }
 
 var (
@@ -33,13 +44,70 @@ var (
 	dbInstance *service
 )
 
+func (s *service) CreateTable() {
+	schema := `
+	CREATE TABLE IF NOT EXISTS wallets (
+		id integer primary key autoincrement,
+		phone_number text not null unique,
+		public_key text not null unique,
+		pin text not null,
+		keystore_path text not null
+	);`
+	s.db.MustExec(schema)
+}
+
+func (s *service) InsertWallet(phoneNumber, pin, publicKey, keystorePath string) error {
+	stmt := `
+	insert into wallets (
+		phone_number,
+		pin,
+		public_key,
+		keystore_path
+	) values (
+		?, ?, ?,?
+	);
+	`
+	_, err := s.db.Exec(stmt, phoneNumber, pin, publicKey, keystorePath)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *service) SelectWalletByPhone(phoneNumber string) (*WalletRecord, error) {
+	stmt := `
+	select *
+	from wallets
+	where phone_number = ?;
+	`
+
+	record := WalletRecord{}
+
+	err := s.db.Get(&record, stmt, phoneNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	return &record, nil
+}
+
+func (s *service) UpdateKeystorePathByID(path string, id uint64) {
+	stmt := `
+	update wallets 
+	set keystore_path = ?
+	where id = ?;
+	`
+
+	s.db.MustExec(stmt, path, id)
+}
+
 func New() Service {
 	// Reuse Connection
 	if dbInstance != nil {
 		return dbInstance
 	}
 
-	db, err := sql.Open("sqlite3", dburl)
+	db, err := sqlx.Open("sqlite3", dburl)
 	if err != nil {
 		// This will not be a connection error, but a DSN parse error or
 		// another initialization error.

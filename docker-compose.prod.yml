@@ -1,0 +1,39 @@
+services:
+  reverse-proxy:
+    image: traefik:v3.1
+    command:
+      - "--providers.docker"
+      - "--api.insecure=true"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+  watchtower:
+    image: containrrr/watchtower
+    command:
+      - "--label-enable"
+      - "--interval"
+      - "30"
+      - "--rolling-restart"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - $HOME/.docker/config.json:/config.json
+  app:
+    image: ghcr.io/web3-research-kenya/ussd_eth_v2:main
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "com.centurylinklabs.watchtower.enable=true"
+    ports:
+      - "3000:3000"
+    environment:
+      APP_ENV: ${APP_ENV}
+      PORT: 3000
+      BLUEPRINT_DB_URL: ${BLUEPRINT_DB_URL}
+    volumes:
+      - sqlite_bp:/app/db
+
+volumes:
+  sqlite_bp:

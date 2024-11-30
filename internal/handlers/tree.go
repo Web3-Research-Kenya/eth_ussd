@@ -7,25 +7,36 @@ import (
 	"sync"
 )
 
+// Template names as constants
 const (
 	createAccount  = "createAccount.tmpl"
 	root           = "root.tmpl"
 	end            = "end.tmpl"
-	phoneNumber    = "phoneNumber.tmpl"
-	recieveEth     = "recieveEth.tmpl"
+	setPin         = "setPin.tmpl"
+	createAccEnd   = "createAccEnd.tmpl"
+	receiveEth     = "receiveEth.tmpl"
 	sendEth        = "sendEth.tmpl"
 	buyGoods       = "buyGoods.tmpl"
 	amount         = "amount.tmpl"
 	accountDetails = "accountDetails.tmpl"
 )
 
-// MenuNode represents a node in the menu tree.
-type MenuNode struct {
-	tmplName string
-	children map[string]*MenuNode
+type NavigationContext struct {
+	Path     []string
+	Data     *Data
+	Response interface{}
+	tree     *MenuTree
 }
 
-// NewMenuNode creates a new MenuNode.
+type NodeFunction func(context *NavigationContext) error
+
+type MenuNode struct {
+	tmplName    string
+	children    map[string]*MenuNode
+	executeFunc NodeFunction
+	parent      *MenuNode
+}
+
 func NewMenuNode(name string) *MenuNode {
 	return &MenuNode{
 		tmplName: name,
@@ -33,64 +44,184 @@ func NewMenuNode(name string) *MenuNode {
 	}
 }
 
-// AddChild adds a child node to the current MenuNode.
-func (m *MenuNode) AddChild(number string, node *MenuNode) {
-	m.children[number] = node
-}
-
-// MenuTree represents the entire menu structure.
 type MenuTree struct {
 	root *MenuNode
 	mu   sync.RWMutex
 }
 
-// NewMenuTree creates a new MenuTree with a root node.
 func NewMenuTree() *MenuTree {
 	return &MenuTree{
 		root: NewMenuNode(root),
 	}
 }
 
-func (mt *MenuTree) AddMenu(path []string, tmplName string) {
-	mt.mu.Lock()
-	defer mt.mu.Unlock()
+func (mt *MenuTree) AddNodeToPath(basePath []string, option string, fn NodeFunction, tmplName string) error {
+	// mt.mu.Lock()
+	// defer mt.mu.Unlock()
+
+	// Navigate to the base path
 	current := mt.root
-	for _, p := range path {
-		if _, exists := current.children[p]; !exists {
-			current.AddChild(p, NewMenuNode(tmplName))
+	for _, p := range basePath {
+		next, exists := current.children[p]
+		if !exists {
+			return fmt.Errorf("base path %v does not exist", basePath)
 		}
-		current = current.children[p]
+		current = next
 	}
+
+	// Create and add the new node
+	newNode := NewMenuNode(tmplName)
+	newNode.executeFunc = fn
+	current.children[option] = newNode
+	newNode.parent = current
+	return nil
 }
 
-// Navigate traverses the menu tree based on the input path string.
-func (mt *MenuTree) Navigate(pathStr *string) string {
-	mt.mu.RLock()
-	defer mt.mu.RUnlock()
+// AddNodeDynamic adds a new node during navigation without deadlocking
+func (mt *MenuTree) AddNodeDynamic(currentPath []string, option string, fn NodeFunction, tmplName string) error {
+	if len(currentPath) == 0 {
+		return fmt.Errorf("path cannot be empty")
+	}
+
+	// Create new node
+	newNode := NewMenuNode(tmplName)
+	newNode.executeFunc = fn
+
+	// Navigate to parent node
+	current := mt.root
+	for _, p := range currentPath {
+		next, exists := current.children[p]
+		if !exists {
+			return fmt.Errorf("path segment %s does not exist", p)
+		}
+		current = next
+	}
+
+	// Add the new node
+	current.children[option] = newNode
+	newNode.parent = current
+
+	return nil
+}
+
+// Navigate function with support for dynamic node addition
+func (mt *MenuTree) Navigate(pathStr *string, d *Data) string {
+	if pathStr == nil {
+		return root
+	}
+
+	// mt.mu.Lock() // Use single lock for entire navigation
+	// defer mt.mu.Unlock()
+
 	path := strings.Split(*pathStr, "*")
 	current := mt.root
-	stack := []*MenuNode{} // Stack to keep track of navigation history
+	stack := make([]*MenuNode, 0, len(path))
+
+	ctx := &NavigationContext{
+		Path: path,
+		Data: d,
+		tree: mt,
+	}
 
 	for _, p := range path {
-		fmt.Printf("%s -> ", p)
-		if child, exists := current.children[p]; exists {
-
-			stack = append(stack, current) // Save current position
-			current = child
-			fmt.Printf("You are now at: %s\n", current.tmplName)
-		} else if p == "0" { // Handle 'back' option
+		if p == "0" {
 			if len(stack) > 0 {
-				fmt.Printf("You are now at: %s\n", current.tmplName)
-				current = stack[len(stack)-1] // Go back to the previous node
-				stack = stack[:len(stack)-1]  // Remove the last node from the stack
-			} else {
-				return root
+				current = stack[len(stack)-1]
+				stack = stack[:len(stack)-1]
+				continue
 			}
-		} else {
-			log.Panicf("Invalid path: %s\n", *pathStr)
+			return root
+		}
+
+		child, exists := current.children[p]
+		if !exists {
+			log.Printf("Invalid menu option: %s", p)
 			return end
 		}
+
+		stack = append(stack, current)
+		current = child
+
+		if current.executeFunc != nil {
+			if err := current.executeFunc(ctx); err != nil {
+				log.Printf("Error executing node function: %v", err)
+				return end
+			}
+		}
 	}
-	pathStr = nil
+
+	*pathStr = ""
 	return current.tmplName
 }
+
+// Helper function to print the menu structure
+func (mt *MenuTree) PrintStructure() {
+	mt.mu.RLock()
+	defer mt.mu.RUnlock()
+
+	fmt.Println("\nMenu Structure:")
+	var printNode func(*MenuNode, string, string)
+	printNode = func(node *MenuNode, prefix string, option string) {
+		fmt.Printf("%s%s -> %s\n", prefix, option, node.tmplName)
+		for opt, child := range node.children {
+			printNode(child, prefix+"  ", opt)
+		}
+	}
+	printNode(mt.root, "", "root")
+}
+
+// Example usage:
+func ExampleUsage() {
+	menuTree := NewMenuTree()
+
+	// Create a function that adds a dynamic node
+	createDynamicNode := func(ctx *NavigationContext) error {
+		// Create a function for the new node
+		newNodeFunc := func(ctx *NavigationContext) error {
+			fmt.Println("Dynamic node executed!")
+			return nil
+		}
+
+		// Add the new node
+		err := ctx.tree.AddNodeDynamic(
+			ctx.Path,       // current path
+			"dynamic",      // new option
+			newNodeFunc,    // function for the new node
+			"dynamic.tmpl", // template
+		)
+		if err != nil {
+			return fmt.Errorf("failed to add dynamic node: %w", err)
+		}
+		fmt.Println("Dynamic node added successfully!")
+		return nil
+	}
+
+	// Add initial node
+	initialPath := []string{}
+	err := menuTree.AddNodeDynamic(
+		initialPath,
+		"1",
+		createDynamicNode,
+		"creator.tmpl",
+	)
+	if err != nil {
+		log.Fatalf("Failed to add initial node: %v", err)
+	}
+
+	// Print initial structure
+	menuTree.PrintStructure()
+
+	// Navigate to trigger dynamic node creation
+	path := "1"
+	template := menuTree.Navigate(&path, &Data{})
+	fmt.Printf("Navigated to template: %s\n", template)
+
+	// Print updated structure
+	menuTree.PrintStructure()
+
+	// Try navigating to the newly created node
+	path = "1*dynamic"
+	template = menuTree.Navigate(&path, &Data{})
+	fmt.Printf("Navigated to dynamic node template: %s\n", template)
+}
+

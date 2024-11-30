@@ -22,6 +22,7 @@ func New() *FiberServer {
 
 		db: database.New(),
 	}
+	server.db.CreateTable()
 
 	server.Use(logger.New())
 
