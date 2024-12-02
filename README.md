@@ -1,4 +1,4 @@
-# Project ussd_eth_v2
+# ETHUSSD
 
 One Paragraph of project description goes here
 
